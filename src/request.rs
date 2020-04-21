@@ -23,22 +23,42 @@ pub fn read<S: Read>(stream: &mut S, timeout: Option<Duration>) -> Result<Reques
 
     let request = loop {
         match stream.read(&mut read_buf) {
-            Ok(0) => return Err(Error::ConnectionClosed),
             Ok(n) => {
-                buffer.extend_from_slice(&read_buf[..n]);
+                log::debug!("received {} bytes", n);
+                if n > 0 {
+                    buffer.extend_from_slice(&read_buf[..n]);
+                }
+                if n == 512 {
+                    continue;
+                }
                 match parsing::try_parse_request(mem::replace(&mut buffer, vec![]))? {
-                    parsing::ParseResult::Complete(r) => break r,
+                    parsing::ParseResult::Complete(r) => {
+                        log::debug!("complete");
+                        break r;
+                    }
                     parsing::ParseResult::Partial(b) => {
+                        log::debug!("partial");
                         mem::replace(&mut buffer, b);
                         continue;
                     }
                 }
             }
             Err(e) => {
+                log::debug!("error {:?}", e);
                 if e.kind() != io::ErrorKind::WouldBlock && e.kind() != io::ErrorKind::TimedOut {
                     return Err(e.into());
                 }
 
+                match parsing::try_parse_request(mem::replace(&mut buffer, vec![]))? {
+                    parsing::ParseResult::Complete(r) => {
+                        log::debug!("complete");
+                        break r;
+                    }
+                    parsing::ParseResult::Partial(b) => {
+                        log::debug!("partial");
+                        mem::replace(&mut buffer, b);
+                    }
+                }
                 if timeout.is_some()
                     && elapsed_milliseconds(&start_time)
                         > duration_to_milliseconds(&timeout.unwrap())
